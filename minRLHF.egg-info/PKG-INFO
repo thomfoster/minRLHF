@@ -1,0 +1,10 @@
+Metadata-Version: 1.0
+Name: minRLHF
+Version: 0.0.0
+Summary: Minimal implementation to train Karpathy's minGPT using PPO on human feedback. For educational purposes.
+Home-page: https://github.com/thomfoster/minRLHF
+Author: Thomas Foster
+Author-email: fosterthom16@gmail.com
+License: UNKNOWN
+Description: UNKNOWN
+Platform: UNKNOWN
