@@ -31,7 +31,8 @@ class PPOTrainer:
         lam: float = 1.0,
         beta: float = 0.001,
         save_steps: int = 50,
-        log_steps: int = 1
+        log_steps: int = 1,
+        log_smoothing_val: float = 0.99
     ):
         """Constructor for PPOTrainer class.
         
@@ -62,6 +63,7 @@ class PPOTrainer:
         self.beta = beta
         self.save_steps = save_steps
         self.log_steps = log_steps
+        self.log_smoothing_val = log_smoothing_val
         
         # Setup actor and optimizer
         self.actor = Actor(actor_model, pad_token_id=pad_token_id, generation_max_length=self.max_ep_length)
@@ -84,6 +86,7 @@ class PPOTrainer:
         )
         
         # Other setup
+        self.rolling_average_logging_vals = {}
         self.reference = Actor(reference_model, pad_token_id=pad_token_id, generation_max_length=self.max_ep_length) 
         self.env = env
         def naive_logprob_augmenter(buf: Buffer)->None:
@@ -185,8 +188,6 @@ class PPOTrainer:
         
     def train(self):
         
-        self.rolling_rewards = []
-        
         for epoch in range(self.num_epochs):
             
             # Generate rollout_batches_per_epoch * rollout_batch_size rollouts
@@ -221,18 +222,20 @@ class PPOTrainer:
                 
             # Logging
             if (epoch + 1)%self.log_steps == 0:
-                # self.log()
                 print(f'Completed epoch {epoch}.')
-                
-                rewards = buf_data['reward'][:, -1].tolist()
-                self.rolling_rewards += rewards
-                 
-                print(f'Reward of {sum(rewards)/len(rewards)} with rolling average of {sum(self.rolling_rewards[-30:])/len(self.rolling_rewards[-30:])}')
-                
+                self.log(self.buffer.summary())
+                self.log(actor_loss_info)
+                self.log(critic_loss_info)
+                print()
 
                 
-    def log(self, data):
-        # print metrics to screen
-        # print examples of rollouts
-        # TODO: Workout how to get this shit in there
-        raise NotImplementedError()
+    def log(self, data: dict):
+        for k, v in data.items():
+            # Update rolling average
+            if k in self.rolling_average_logging_vals:
+                self.rolling_average_logging_vals[k] = ((1 - self.log_smoothing_val) * v) + (self.log_smoothing_val * self.rolling_average_logging_vals[k])
+            else:
+                self.rolling_average_logging_vals[k] = v
+        
+            # Print totals
+            print(f'{k}: {v} ({self.rolling_average_logging_vals[k]} average)')

@@ -175,3 +175,12 @@ class Buffer:
         for idx in range(self.max_episodes):
             self.advantages_buffer[idx, :] = \
                 discounted_cumsum_right(zerod_deltas[idx].unsqueeze(0), gamma*lam)
+                
+    def summary(self):
+        return {
+            'reward_mean': self.reward_buffer.sum(axis=-1).mean().item(),
+            'reward_std': self.reward_buffer.sum(axis=-1).std().item(),
+            'augmented_reward': self.augmented_reward_buffer.sum(axis=-1).mean().item(),
+            'completion_length_mean': self.completion_mask_buffer.to(torch.float32).sum(axis=-1).mean().item(),
+            'completion_length_std': self.completion_mask_buffer.to(torch.float32).sum(axis=-1).std().item()
+        }
