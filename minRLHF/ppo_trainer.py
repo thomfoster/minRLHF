@@ -12,12 +12,13 @@ class PPOTrainer:
     def __init__(
         self, 
         actor_model, 
-        critic_model, 
+        critic_model,
+        reference_model, 
         env: Environment,
-        max_ep_length: int = 512,
+        max_ep_length: int = 100,
         rollout_batch_size: int = 16,
         rollout_batches_per_epoch: int = 1,
-        num_epochs: int = 500,
+        num_epochs: int = 200,
         actor_train_batch_size: int = 4,
         actor_train_iters: int = 20,
         actor_lr: float = 1e-5,
@@ -30,7 +31,7 @@ class PPOTrainer:
         lam: float = 1.0,
         beta: float = 0.001,
         save_steps: int = 50,
-        log_steps: int = 10
+        log_steps: int = 1
     ):
         """Constructor for PPOTrainer class.
         
@@ -42,8 +43,7 @@ class PPOTrainer:
             env (minRLHF.environment.Environment): Env used to generate initial
                                                    prompts and score the actor's generations.
         """
-        pad_token_id = 50268    # TODO! Fix how hyperparams are given
-        vocab_size = 6000       # TODO: What hyperparams are at initialisation vs runtime?
+        pad_token_id = 50256       
         # save hyperparams
         self.max_ep_length = max_ep_length
         self.rollout_batch_size = rollout_batch_size
@@ -64,7 +64,7 @@ class PPOTrainer:
         self.log_steps = log_steps
         
         # Setup actor and optimizer
-        self.actor = Actor(actor_model, pad_token_id=pad_token_id)
+        self.actor = Actor(actor_model, pad_token_id=pad_token_id, generation_max_length=self.max_ep_length)
         self.actor_optimizer = AdamW(self.actor.model.parameters(), lr=self.actor_lr)
         self.actor_lr_scheduler = get_scheduler(
             'linear',
@@ -84,15 +84,15 @@ class PPOTrainer:
         )
         
         # Other setup
-        self.reference = Actor(actor_model, pad_token_id=pad_token_id)  # TODO! Solve deepcopy of reference
+        self.reference = Actor(reference_model, pad_token_id=pad_token_id, generation_max_length=self.max_ep_length) 
         self.env = env
         def naive_logprob_augmenter(buf: Buffer)->None:
             buf.reward_augmentation_buffer[:, :] = -((buf.pi_t_logprobs_buffer - buf.pi_0_logprobs_buffer) ** 2)/2
         self.buffer = Buffer(
-            vocab_size=vocab_size,
             max_episodes=self.rollout_batch_size * self.rollout_batches_per_epoch,
             max_ep_length=self.max_ep_length,
-            reward_augmenter=naive_logprob_augmenter
+            reward_augmenter=naive_logprob_augmenter,
+            device=torch.device('cpu')
         ) # TODO: Might need to do this at train time
     
         
@@ -152,6 +152,7 @@ class PPOTrainer:
             data = {}   # we store working variables in here for easier device management
             
             data['prompt_ids'], data['prompt_mask'] = self.env.reset()
+            breakpoint()
             
             # Completions and associated logprobs computed on actor device
             data = gather_dict(data, self.actor.device, keys=['prompt_ids', 'prompt_mask'])
@@ -164,7 +165,7 @@ class PPOTrainer:
             
             # Rewards computed by environment on cpu
             data = gather_dict(data, torch.device('cpu'), keys=['completion_ids', 'prompt_mask', 'completion_mask'])
-            data['rewards'] = self.env.get_rewards(data['completion_ids'], data['prompt_mask'], data['completion_mask'])
+            data['reward'] = self.env.get_rewards(data['completion_ids'], data['prompt_mask'], data['completion_mask'])
             
             # Compute critic value estimates on critic device
             data = gather_dict(data, self.critic.device, keys=['completion_ids', 'prompt_mask', 'completion_mask'])
@@ -174,10 +175,18 @@ class PPOTrainer:
             pad_length = data['completion_mask'].shape[1] - data['prompt_mask'].shape[1]
             data['prompt_mask'] = torch.nn.functional.pad(data['prompt_mask'], (0,pad_length))
             
+            # Do some key mangling to make the return dict map to our buffer correctly
+            data.pop('prompt_ids')
+            data['state'] = data.pop('completion_ids')
+            
             return data
+            
         
         
     def train(self):
+        
+        self.rolling_rewards = []
+        
         for epoch in range(self.num_epochs):
             
             # Generate rollout_batches_per_epoch * rollout_batch_size rollouts
@@ -211,9 +220,15 @@ class PPOTrainer:
             self.critic_lr_scheduler.step()
                 
             # Logging
-            if (epoch + 1)%self.save_steps == 0:
+            if (epoch + 1)%self.log_steps == 0:
                 # self.log()
                 print(f'Completed epoch {epoch}.')
+                
+                rewards = buf_data['reward'][:, -1].tolist()
+                self.rolling_rewards += rewards
+                 
+                print(f'Reward of {sum(rewards)/len(rewards)} with rolling average of {sum(self.rolling_rewards[-30:])/len(self.rolling_rewards[-30:])}')
+                
 
                 
     def log(self, data):

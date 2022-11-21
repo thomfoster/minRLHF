@@ -8,7 +8,10 @@ class Critic:
         
     def to(self, device):
         self.model = self.model.to(device)
-        self.device = self.model.device
+        
+    @property
+    def device(self):
+        return self.model.device
         
     def get_value_estimates(self, output_ids, input_mask, output_mask):
         """

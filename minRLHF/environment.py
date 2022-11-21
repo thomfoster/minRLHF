@@ -15,7 +15,7 @@ class Environment(ABC):
         
     def reset(self):
         batch = [self.get_input_prompt() for _ in range(self.batch_size)]
-        inputs = self.tokenizer(batch, truncate=True, padding=True, return_tensors='pt')
+        inputs = self.tokenizer(batch, truncation=True, padding=True, return_tensors='pt')
         return inputs.input_ids, inputs.attention_mask
         
     def get_rewards(self, output_ids, input_mask, output_mask):

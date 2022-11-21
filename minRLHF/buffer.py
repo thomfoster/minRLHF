@@ -10,13 +10,13 @@ def default_reward_augmenter(buf: Buffer) -> None:
 
 
 class Buffer:
-    def __init__(self, vocab_size:int, device: Optional[str]=None, max_episodes: int=32, 
+    def __init__(self, device: Optional[str]=None, max_episodes: int=32, 
                  max_ep_length: int=50, reward_augmenter: Callable[[Buffer], None]=default_reward_augmenter):
         """
         Store batches of generated strings + rewards + value estimates. 
         Compute augmented rewards and advantages.
         """
-        self.vocab_size = vocab_size
+        # self.vocab_size = vocab_size
         self.device = torch.device(device) if device is not None \
             else torch.device('cuda:0') if torch.cuda.is_available() \
                 else torch.device('cpu')
@@ -50,13 +50,21 @@ class Buffer:
         
         
     def store(self, state: torch.Tensor, prompt_mask: torch.Tensor, completion_mask: torch.Tensor, reward: torch.Tensor, 
-              value_estimates: torch.Tensor, pi_0_logprobs: torch.Tensor, pi_t_logprobs: torch.Tensor, pi_0: torch.Tensor, pi_t: torch.Tensor):
+              value_estimates: torch.Tensor, pi_0_logprobs: torch.Tensor, pi_t_logprobs: torch.Tensor):
         """
         Add batches of episodes to the buffer.
         """
         # TODO: Allow both "batch" and "state by state" storage.
         
         # Check we won't overflow the buffers
+        assert len(state.shape) == 2
+        assert len(prompt_mask.shape) == 2
+        assert len(completion_mask.shape) == 2
+        assert len(reward.shape) == 2
+        assert len(value_estimates.shape) == 2
+        assert len(pi_0_logprobs.shape) == 2
+        assert len(pi_t_logprobs.shape) == 2
+        
         batch_size = state.shape[0]
         assert prompt_mask.shape[0] == batch_size
         assert completion_mask.shape[0] == batch_size
@@ -74,8 +82,8 @@ class Buffer:
         assert value_estimates.shape[1] == self.max_ep_length
         assert pi_0_logprobs.shape[1] == self.max_ep_length
         assert pi_t_logprobs.shape[1] == self.max_ep_length
-        assert pi_0.shape[1] == self.max_ep_length
-        assert pi_t.shape[1] == self.max_ep_length
+        # assert pi_0.shape[1] == self.max_ep_length
+        # assert pi_t.shape[1] == self.max_ep_length
         
         # assert pi_0.shape[2] == self.vocab_size
         # assert pi_t.shape[2] == self.vocab_size

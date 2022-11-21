@@ -29,7 +29,10 @@ class Actor:
         
     def to(self, device):
         self.model = self.model.to(device)
-        self.device = self.model.device
+        
+    @property
+    def device(self):
+        return self.model.device
 
     def get_rollouts(self, input_ids, input_mask):
         """
