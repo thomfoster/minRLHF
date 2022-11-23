@@ -16,23 +16,23 @@ class PPOTrainer:
         reference_model, 
         env: Environment,
         max_ep_length: int = 100,
-        rollout_batch_size: int = 16,
-        rollout_batches_per_epoch: int = 1,
-        num_epochs: int = 200,
-        actor_train_batch_size: int = 4,
-        actor_train_iters: int = 20,
+        rollout_batch_size: int = 32,
+        rollout_batches_per_epoch: int = 3,
+        num_epochs: int = 1000,
+        actor_train_batch_size: int = 16,
+        actor_train_iters: int = 4,
         actor_lr: float = 1e-5,
-        critic_train_batch_size: int = 4,
-        critic_train_iters: int = 5,
-        critic_lr: float = 1e-6,
+        critic_train_batch_size: int = 16,
+        critic_train_iters: int = 8,
+        critic_lr: float = 1e-5,
         target_kl: float = 0.05,
         clip_ratio: float = 0.2,
         gamma: float = 1.0,
         lam: float = 1.0,
-        beta: float = 0.001,
+        beta: float = 0.005,
         save_steps: int = 50,
         log_steps: int = 1,
-        log_smoothing_val: float = 0.99
+        log_smoothing_val: float = 0.95
     ):
         """Constructor for PPOTrainer class.
         
@@ -155,7 +155,6 @@ class PPOTrainer:
             data = {}   # we store working variables in here for easier device management
             
             data['prompt_ids'], data['prompt_mask'] = self.env.reset()
-            breakpoint()
             
             # Completions and associated logprobs computed on actor device
             data = gather_dict(data, self.actor.device, keys=['prompt_ids', 'prompt_mask'])
@@ -190,23 +189,40 @@ class PPOTrainer:
         
         for epoch in range(self.num_epochs):
             
+            self.buffer.reset()
+            
             # Generate rollout_batches_per_epoch * rollout_batch_size rollouts
             for rollout_batch_idx in range(self.rollout_batches_per_epoch):
+                # print(f'Generating rollout batch {rollout_batch_idx}')
                 rollout = self.get_rollout()
                 rollout = gather_dict(rollout, self.buffer.device)
                 self.buffer.store(**rollout)
                 
-            buf_data = self.buffer.get(self.gamma, self.lam, self.beta) # TODO! implement a buffer.get_batches()    Since we'll need to iterate over data twice do this as a Map Dataset not iterable. Dunno how we'll store completions of differing lengths :O
             
             # Use the rollouts to optimise the actor
             for actor_train_step in range(self.actor_train_iters):
-                actor_loss, actor_loss_info = self.compute_actor_loss(buf_data)
+                actor_train_batches = self.buffer.get(self.actor_train_batch_size, self.gamma, self.lam, self.beta)
                 
-                if actor_loss_info['kld_t-1'] > 1.5 * self.target_kl:
-                    print(f'Early stopping at {actor_train_step} due to kl of ~', actor_loss_info['kld_t-1'])
+                average_actor_loss_info = {}
+                for batch_idx, buf_data in enumerate(actor_train_batches):
+                    # print(f'Getting actor loss for train step {actor_train_step} and batch {batch_idx}')
+                    actor_loss, actor_loss_info = self.compute_actor_loss(buf_data)
+                    actor_loss.backward()
+                    
+                    # average the loss info over the batches
+                    for k,v in actor_loss_info.items():
+                        if k in average_actor_loss_info:
+                            average_actor_loss_info[k].append(v)
+                        else:
+                            average_actor_loss_info[k] = [v]
+                            
+                for k,v in average_actor_loss_info.items():
+                    average_actor_loss_info[k] = sum(v)/len(v)
+                    
+                if average_actor_loss_info['kld_t-1'] > 1.5 * self.target_kl:
+                    print(f'Early stopping at {actor_train_step} due to kl of ~', average_actor_loss_info['kld_t-1'])
                     break
-                
-                actor_loss.backward()
+                    
                 self.actor_optimizer.step()
                 self.actor_optimizer.zero_grad()
                 
@@ -214,20 +230,40 @@ class PPOTrainer:
                 
             # Use the rollouts to optimise the critic
             for critic_train_step in range(self.critic_train_iters):
-                critic_loss, critic_loss_info = self.compute_critic_loss(buf_data)
-                critic_loss.backward()
+                critic_train_batches = self.buffer.get(self.critic_train_batch_size, self.gamma, self.lam, self.beta)
+                
+                average_critic_loss_info = {}
+                for batch_idx, buf_data in enumerate(critic_train_batches):
+                    # print(f'Getting critic loss for step {critic_train_step} and batch {batch_idx}')
+                    critic_loss, critic_loss_info = self.compute_critic_loss(buf_data)
+                    critic_loss.backward()
+                    
+                    # average the loss info over the batches
+                    for k,v in average_critic_loss_info.items():
+                        if k in average_critic_loss_info:
+                            average_critic_loss_info[k].append(v)
+                        else:
+                            average_critic_loss_info[k] = [v]    
+                            
+                for k,v in average_critic_loss_info.items():
+                    average_critic_loss_info[k] = sum(v)/len(v)
+                    
                 self.critic_optimizer.step()
                 self.critic_optimizer.zero_grad()
+                
             self.critic_lr_scheduler.step()
                 
             # Logging
             if (epoch + 1)%self.log_steps == 0:
                 print(f'Completed epoch {epoch}.')
                 self.log(self.buffer.summary())
-                self.log(actor_loss_info)
-                self.log(critic_loss_info)
+                self.log(average_actor_loss_info)
+                self.log(average_critic_loss_info)
                 print()
 
+            if (epoch + 1)%self.save_steps == 0:
+                self.actor.model.save_pretrained(f'actor_{epoch}.model')
+                
                 
     def log(self, data: dict):
         for k, v in data.items():

@@ -103,7 +103,7 @@ class Buffer:
         self.ptr += batch_size
         
 
-    def get(self, gamma: float, lam: float, beta: float):
+    def get(self, batch_size: int, gamma: float, lam: float, beta: float):
         """
         Compute advantages etc, then return tensors.
 
@@ -118,7 +118,6 @@ class Buffer:
         # TODO: Add `last_val` option for controlling end of sequence rewards.
         
         assert self.ptr == self.max_episodes    # Asserting full makes tensor logic much easier
-        self.ptr = 0
         
         self.reward_augmenter(self)     # Side effect: Fills augmentation buffer
         self.augmented_reward_buffer = self.reward_buffer + beta * self.reward_augmentation_buffer     # actually augment rewards
@@ -130,21 +129,26 @@ class Buffer:
         mu, sigma = self.advantages_buffer.mean(dim=-1).unsqueeze(-1), self.advantages_buffer.std(dim=-1).unsqueeze(-1)
         self.advantages_buffer = (self.advantages_buffer - mu) / sigma
         
-        # ? Do we need to return copies here?
-        return {
-            'ids': self.state_buffer,
-            'prompt_mask': self.prompt_mask_buffer,
-            'completion_mask': self.completion_mask_buffer,
-            'reward': self.reward_buffer,
-            'value_estimates': self.value_estimates_buffer,
-            'pi_0_logprobs': self.pi_0_logprobs_buffer,
-            'pi_t_logprobs': self.pi_t_logprobs_buffer,
-            # 'pi_0': self.pi_0_buffer,
-            # 'pi_t': self.pi_t_buffer,
-            'critic_targets': self.critic_targets_buffer,
-            'advantages': self.advantages_buffer,
-            'augmented_reward': self.augmented_reward_buffer,
-        }
+        for start_idx in range(0, self.max_episodes, batch_size):
+            end_idx = start_idx + batch_size
+            
+            yield {
+                'ids': self.state_buffer[start_idx:end_idx, :],
+                'prompt_mask': self.prompt_mask_buffer[start_idx:end_idx, :],
+                'completion_mask': self.completion_mask_buffer[start_idx:end_idx, :],
+                'reward': self.reward_buffer[start_idx:end_idx, :],
+                'value_estimates': self.value_estimates_buffer[start_idx:end_idx, :],
+                'pi_0_logprobs': self.pi_0_logprobs_buffer[start_idx:end_idx, :],
+                'pi_t_logprobs': self.pi_t_logprobs_buffer[start_idx:end_idx, :],
+                # 'pi_0': self.pi_0_buffer,
+                # 'pi_t': self.pi_t_buffer,
+                'critic_targets': self.critic_targets_buffer[start_idx:end_idx, :],
+                'advantages': self.advantages_buffer[start_idx:end_idx, :],
+                'augmented_reward': self.augmented_reward_buffer[start_idx:end_idx, :],
+            }
+        
+    def reset(self):
+        self.ptr = 0
     
     
     def _compute_critic_targets(self, gamma):
