@@ -17,7 +17,7 @@ class PPOTrainer:
         env: Environment,
         max_ep_length: int = 100,
         rollout_batch_size: int = 32,
-        rollout_batches_per_epoch: int = 3,
+        rollout_batches_per_epoch: int = 4,
         num_epochs: int = 1000,
         actor_train_batch_size: int = 16,
         actor_train_iters: int = 4,
@@ -87,6 +87,7 @@ class PPOTrainer:
         
         # Other setup
         self.rolling_average_logging_vals = {}
+        self.collected_rewards = []
         self.reference = Actor(reference_model, pad_token_id=pad_token_id, generation_max_length=self.max_ep_length) 
         self.env = env
         def naive_logprob_augmenter(buf: Buffer)->None:
@@ -220,7 +221,7 @@ class PPOTrainer:
                     average_actor_loss_info[k] = sum(v)/len(v)
                     
                 if average_actor_loss_info['kld_t-1'] > 1.5 * self.target_kl:
-                    print(f'Early stopping at {actor_train_step} due to kl of ~', average_actor_loss_info['kld_t-1'])
+                    print(f'(Epoch:{epoch} actor iter: {actor_train_step}) Early stopping due to kl of ~', average_actor_loss_info['kld_t-1'])
                     break
                     
                 self.actor_optimizer.step()
@@ -254,15 +255,21 @@ class PPOTrainer:
             self.critic_lr_scheduler.step()
                 
             # Logging
+            self.collected_rewards.append(self.buffer.summary()['reward_mean'])
+            self.log(self.buffer.summary())
+            self.log(average_actor_loss_info)
+            self.log(average_critic_loss_info)
+            
             if (epoch + 1)%self.log_steps == 0:
                 print(f'Completed epoch {epoch}.')
-                self.log(self.buffer.summary())
-                self.log(average_actor_loss_info)
-                self.log(average_critic_loss_info)
+                for k, v in self.rolling_average_logging_vals.items():
+                    print(f'{k}: {v}')
                 print()
 
             if (epoch + 1)%self.save_steps == 0:
-                self.actor.model.save_pretrained(f'actor_{epoch}.model')
+                model_fpath = f'actor_{epoch}.model'
+                self.actor.model.save_pretrained(model_fpath)
+                print(f'(Epoch: {epoch}) Saved model to {model_fpath}')
                 
                 
     def log(self, data: dict):
@@ -272,6 +279,4 @@ class PPOTrainer:
                 self.rolling_average_logging_vals[k] = ((1 - self.log_smoothing_val) * v) + (self.log_smoothing_val * self.rolling_average_logging_vals[k])
             else:
                 self.rolling_average_logging_vals[k] = v
-        
-            # Print totals
-            print(f'{k}: {v} ({self.rolling_average_logging_vals[k]} average)')
+            
